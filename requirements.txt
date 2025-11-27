@@ -6,3 +6,5 @@ pillow==10.0.0
 pytesseract==0.3.10
 aiofiles==23.1.0
 requests==2.31.0
+google-generativeai
+pillow

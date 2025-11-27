@@ -1,4 +1,3 @@
-# app.py
 import os
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -11,25 +10,25 @@ app = FastAPI(title="Screenshot Tagging Service")
 
 @app.get("/health")
 async def health():
+    print("Health check requested")
     return {"status": "ok"}
 
 @app.post("/upload")
 async def upload_and_tag(
-    files: List[UploadFile] = File(...),
-    use_google: bool = Form(False)
+    files: List[UploadFile] = File(...)
 ):
-    """
-    Accepts multiple image files.
-    - use_google (form bool) if True will attempt to use Google (you must implement keys).
-    Returns an xlsx file as streaming response.
-    """
+    print(f"Received {len(files)} file(s) for tagging")
     all_events = []
     page_index = 1
+
     for f in files:
+        print(f"\nProcessing file {page_index}: {f.filename}")
         content = await f.read()
-        # run analyzer (local by default)
-        events = analyze_image(content, use_google=use_google)
-        # map into page-level events
+        print(f"Read {len(content)} bytes from file {f.filename}")
+        
+        events = analyze_image(content)
+        print(f"Found {len(events)} events in {f.filename}")
+        
         for e in events:
             all_events.append({
                 "page": f"{f.filename} (page {page_index})",
@@ -40,8 +39,8 @@ async def upload_and_tag(
             })
         page_index += 1
 
-    # If no events were found, add a fallback row to help user
     if not all_events:
+        print("No events detected in any file. Adding fallback row.")
         all_events.append({
             "page": "N/A",
             "element": "Unknown",
@@ -50,7 +49,10 @@ async def upload_and_tag(
             "description": "Please review manually or enable Google Vision for better detection"
         })
 
+    print(f"Total events collected: {len(all_events)}. Generating Excel...")
     xlsx_bytes = json_to_excel_bytes(all_events)
+    print("Excel generation complete. Sending response.")
+
     return StreamingResponse(BytesIO(xlsx_bytes),
                              media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": 'attachment; filename="data_tagging.xlsx"'})

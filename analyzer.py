@@ -1,82 +1,79 @@
-# analyzer.py
-from io import BytesIO
+#analyzer.py
+import os
 from PIL import Image
-import pytesseract
-import re
-import base64
+from io import BytesIO
+import google.generativeai as genai
+import json
 
-# heuristics keywords -> event mappings (extend as needed)
-KEYWORDS = {
-    "upload": {"event": "Click", "element_hint": "Upload Button"},
-    "submit": {"event": "Click", "element_hint": "Submit Button"},
-    "select": {"event": "Click", "element_hint": "Dropdown"},
-    "dropdown": {"event": "Click", "element_hint": "Dropdown"},
-    "discrepancy": {"event": "View", "element_hint": "Discrepancy panel"},
-    "upload front": {"event": "Click", "element_hint": "Upload Front"},
-    "upload back": {"event": "Click", "element_hint": "Upload Back"},
-    "your deposit is on hold": {"event": "View", "element_hint": "Hold Banner"},
-    "camera": {"event": "Click", "element_hint": "Camera Icon"},
-}
+# -----------------------------
+# CONFIGURE GOOGLE FREE MODEL
+# -----------------------------
+genai.configure(api_key="AIzaSyC4mtKL0myHgRtQStZemypKLujiRJhIILg") 
+model = genai.GenerativeModel("gemini-flash-latest")   
 
-def _text_from_image_bytes(image_bytes):
-    img = Image.open(BytesIO(image_bytes)).convert("L")
-    # simple threshold/resizing to help OCR
-    img = img.resize((int(img.width * 1.5), int(img.height * 1.5)))
-    text = pytesseract.image_to_string(img)
-    return text.lower()
+print("Configured Google Generative AI model: gemini-flash-latest")
 
-def heuristic_parse_text(text):
-    parsed_events = []
-    lines = text.splitlines()
-    joined = " ".join([l.strip() for l in lines if l.strip()])
-    # match multi-word keywords first
-    for kw, meta in sorted(KEYWORDS.items(), key=lambda x: -len(x[0])):
-        if kw in joined:
-            parsed_events.append({
-                "element": meta["element_hint"],
-                "event_type": meta["event"],
-                "trigger": f"Detected text '{kw}'",
-                "description": f"Auto-detected by keyword '{kw}' in OCR text"
-            })
-    # fallback: look for words like Upload/Submit and generate generic events
-    # find single-word matches
-    for w in ["upload", "submit", "select", "dropdown", "camera"]:
-        if re.search(r'\b' + w + r'\b', joined):
-            meta = KEYWORDS.get(w, None)
-            if meta:
-                parsed_events.append({
-                    "element": meta["element_hint"],
-                    "event_type": meta["event"],
-                    "trigger": f"Detected text '{w}'",
-                    "description": f"Auto-detected by OCR word '{w}'"
-                })
-    # ensure unique by element+event_type
-    seen = set()
-    unique = []
-    for e in parsed_events:
-        key = (e["element"], e["event_type"])
-        if key not in seen:
-            seen.add(key)
-            unique.append(e)
-    return unique
-
-def analyze_image(image_bytes: bytes, use_google=False, google_config: dict | None = None):
+def analyze_image(image_bytes: bytes):
     """
-    Return list of event dicts for the image.
-    Each dict: {page, element, event_type, trigger, description}
+    Sends a single image to Google's free Gemini Flash Vision model
+    and returns structured tagging JSON.
     """
-    # If the user wants to call Google Vision / Gemini, they can enable and implement here.
-    if use_google:
-        # ---------- PLACEHOLDER: integrate Google Generative Vision API here ----------
-        # Example (pseudocode):
-        # 1. send image bytes to Google Vision / Generative endpoint
-        # 2. receive structured annotations (detected_text, layout, UI elements)
-        # 3. map those annotations into the same output format below
-        #
-        # For now we fallback to local OCR so you can test without keys.
-        pass
+    print("Opening image...")
+    image = Image.open(BytesIO(image_bytes))
+    print(f"Image opened: format={image.format}, size={image.size}, mode={image.mode}")
 
-    # local OCR + heuristics
-    text = _text_from_image_bytes(image_bytes)
-    events = heuristic_parse_text(text)
-    return events
+    prompt = """
+    You are an expert UI/UX event tagging assistant.
+    Identify all user-actions based on buttons, icons, text & UI elements.
+    For each action return:
+
+    - page: Name of the screen/page (guess if needed)
+    - element: Name of the UI element (button/icon/text/etc.)
+    - event_type: Click or View
+    - trigger: What user action triggers this event
+    - description: What the event means
+
+    Return ONLY JSON as a list:
+    [
+      {
+        "page": "",
+        "element": "",
+        "event_type": "",
+        "trigger": "",
+        "description": ""
+      }
+    ]
+    """
+
+    print("Sending image to model for analysis...")
+    try:
+        response = model.generate_content(
+            [prompt, image],
+            generation_config={
+                "response_mime_type": "application/json"
+            }
+        )
+        print("Received response from model.")
+    except Exception as e:
+        print(f"Error while generating content: {e}")
+        return []
+
+    # Ensure valid JSON
+    try:
+        events = json.loads(response.text)
+        print(f"Parsed JSON successfully. Number of events found: {len(events)}")
+        return events
+    except Exception as e:
+        print(f"Error parsing JSON: {e}")
+        return []
+
+def analyze_images(image_list: list[bytes]):
+    """Process multiple images & merge results."""
+    all_events = []
+    for idx, img_bytes in enumerate(image_list, start=1):
+        print(f"\n--- Processing image {idx}/{len(image_list)} ---")
+        events = analyze_image(img_bytes)
+        all_events.extend(events)
+        print(f"Finished processing image {idx}, cumulative events: {len(all_events)}")
+    print(f"\nAll images processed. Total events collected: {len(all_events)}")
+    return all_events
